@@ -1,0 +1,8 @@
+{
+  "name": "Penyelamat anggaran free",
+  "description": "",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}

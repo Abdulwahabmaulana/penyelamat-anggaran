@@ -21,7 +21,12 @@ interface DashboardProps {
   hasApiKey: boolean;
 }
 
-const formatCurrency = (amount: number) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(amount);
+const formatCurrency = (amount: number) => {
+    if (Math.abs(amount) >= 1e11) {
+        return amount.toExponential(2);
+    }
+    return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(amount);
+};
 
 const formatMarkdown = (text: string) => {
     return text

@@ -220,7 +220,12 @@ const PERSONA_INSTRUCTIONS: Record<string, string> = {
 };
 
 // --- UTILITY FUNCTIONS ---
-const formatCurrency = (amount: number) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(amount);
+const formatCurrency = (amount: number) => {
+    if (Math.abs(amount) >= 1e11) {
+        return amount.toExponential(2);
+    }
+    return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(amount);
+};
 const formatNumberInput = (value: string | number) => {
     const numString = String(value).replace(/[^0-9]/g, '');
     if (numString === '') return '';
@@ -912,6 +917,41 @@ const SettingsModalContent: React.FC<{
                 </button>
             </div>
         </section>
+
+        <div className="mt-8 pt-6 border-t border-gray-100">
+            <div className="bg-gradient-to-br from-slate-50 to-white p-5 rounded-2xl border border-slate-200 shadow-sm text-center">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">
+                    Dikembangkan Oleh
+                </p>
+                
+                <div className="mb-4">
+                    <h3 className="text-lg font-extrabold text-primary-navy">Abdul Wahab Maulana</h3>
+                    <a 
+                        href="https://wa.me/6285695338505" 
+                        target="_blank" 
+                        rel="noreferrer"
+                        className="text-sm font-medium text-accent-teal hover:text-accent-teal-dark transition-colors flex items-center justify-center gap-1 mt-1"
+                    >
+                        <span>📱 0856-9533-8505</span>
+                    </a>
+                </div>
+
+                <div className="space-y-2">
+                    <p className="text-[10px] text-slate-500 font-semibold">Teknologi & Framework</p>
+                    <div className="flex flex-wrap justify-center gap-2">
+                        {['React 19', 'TypeScript', 'Tailwind CSS', 'Gemini AI', 'Recharts', 'jsPDF'].map(tech => (
+                            <span key={tech} className="px-2 py-1 bg-white border border-slate-200 rounded-md text-[10px] font-bold text-slate-600 shadow-sm">
+                                {tech}
+                            </span>
+                        ))}
+                    </div>
+                </div>
+                
+                <p className="text-[9px] text-slate-300 mt-4">
+                    &copy; {new Date().getFullYear()} Budget Manager App. All rights reserved.
+                </p>
+            </div>
+        </div>
     </div>
 );
 
@@ -1570,7 +1610,7 @@ const App: React.FC = () => {
     
     useEffect(() => {
         const today = new Date();
-        const todayStr = today.toLocaleDateString('fr-CA'); // YYYY-MM-DD
+        const todayStr = today.toLocaleDateString('fr-CA'); // YYY<ctrl46>-MM-DD
         const lastCheck = state.achievementData?.lastStreakCheck;
 
         if (todayStr !== lastCheck) {

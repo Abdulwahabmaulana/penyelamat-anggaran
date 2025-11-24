@@ -2,10 +2,10 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
     Treemap, Tooltip, Legend, ResponsiveContainer, 
-    BarChart, Bar, AreaChart, Area, XAxis, YAxis, CartesianGrid 
+    BarChart, Bar, AreaChart, Area, XAxis, YAxis, CartesianGrid, Cell
 } from 'recharts';
 import type { AppState, Budget, GlobalTransaction } from '../types';
-import { LightbulbIcon, SparklesIcon, LockClosedIcon, ShieldCheckIcon, BuildingLibraryIcon, BanknotesIcon, Squares2x2Icon, ExclamationTriangleIcon, ArrowUturnLeftIcon, ArrowTrendingUpIcon } from './Icons';
+import { LightbulbIcon, SparklesIcon, LockClosedIcon, ShieldCheckIcon, BuildingLibraryIcon, BanknotesIcon, Squares2x2Icon, ExclamationTriangleIcon, ArrowUturnLeftIcon, ArrowTrendingUpIcon, ArrowPathIcon } from './Icons';
 import { AISkeleton } from './UI';
 
 interface VisualizationsProps {
@@ -16,7 +16,12 @@ interface VisualizationsProps {
     hasApiKey: boolean;
 }
 
-const formatCurrency = (amount: number) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(amount);
+const formatCurrency = (amount: number) => {
+    if (Math.abs(amount) >= 1e11) {
+        return amount.toExponential(2);
+    }
+    return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(amount);
+};
 const formatShortCurrency = (amount: number) => {
     if (amount >= 1000000) return `${(amount / 1000000).toFixed(1)} Jt`;
     if (amount >= 1000) return `${(amount / 1000).toFixed(0)} rb`;
@@ -130,229 +135,201 @@ const CustomizedTreemapContent = (props: any) => {
 };
 
 const Visualizations: React.FC<VisualizationsProps> = ({ state, onBack, onAnalyzeChart, activePersona, hasApiKey }) => {
-    const [chartType, setChartType] = useState<'treemap' | 'bar' | 'area'>('treemap');
-    const [analysis, setAnalysis] = useState<string>('');
+    const [chartType, setChartType] = useState<'allocation' | 'spending_trend' | 'income_vs_expense'>('allocation');
+    const [aiAnalysis, setAiAnalysis] = useState('');
     const [isAnalyzing, setIsAnalyzing] = useState(false);
 
-    const treemapData = useMemo(() => {
-        const budgetItems = state.budgets
-            .filter(b => !b.isArchived)
-            .map((b, index) => {
-                const used = b.history.reduce((sum, h) => sum + h.amount, 0);
-                return {
-                    name: b.name,
-                    size: used,
-                    fill: b.color || COLORS[index % COLORS.length]
-                };
-            });
-
+    // Prepare Data: Allocation (Treemap)
+    const allocationData = useMemo(() => {
+        const data: any[] = [];
+        // Budgets
+        state.budgets.filter(b => !b.isArchived).forEach(b => {
+            const used = b.history.reduce((sum, h) => sum + h.amount, 0);
+            if(used > 0) {
+                data.push({ name: b.name, size: used, fill: b.color || COLORS[0] });
+            }
+        });
+        // Daily Expenses
         const dailyTotal = state.dailyExpenses.reduce((sum, t) => sum + t.amount, 0);
         if (dailyTotal > 0) {
-            budgetItems.push({
-                name: 'Harian',
-                size: dailyTotal,
-                fill: '#34495E' // Dark Blue/Grey
-            });
+            data.push({ name: 'Harian', size: dailyTotal, fill: COLORS[1] });
         }
-
-        const generalTotal = state.fundHistory
-            .filter(t => t.type === 'remove' && !t.desc.startsWith('Tabungan:'))
-            .reduce((sum, t) => sum + t.amount, 0);
-        
+        // General Funds Expense
+        const generalTotal = state.fundHistory.filter(t => t.type === 'remove').reduce((sum, t) => sum + t.amount, 0);
         if (generalTotal > 0) {
-            budgetItems.push({
-                name: 'Umum',
-                size: generalTotal,
-                fill: '#95A5A6' // Grey
-            });
+            data.push({ name: 'Dana Umum', size: generalTotal, fill: COLORS[2] });
         }
+        return data.sort((a,b) => b.size - a.size);
+    }, [state]);
 
-        return budgetItems
-            .filter(item => item.size > 0)
-            .sort((a, b) => b.size - a.size);
-    }, [state.budgets, state.dailyExpenses, state.fundHistory]);
+    // Prepare Data: Spending Trend (Area)
+    const trendData = useMemo(() => {
+        const map: {[date: string]: number} = {};
+        const allTx = [
+            ...state.dailyExpenses,
+            ...state.fundHistory.filter(t => t.type === 'remove'),
+            ...state.budgets.flatMap(b => b.history)
+        ];
+        allTx.forEach(t => {
+            const d = new Date(t.timestamp).toLocaleDateString('fr-CA');
+            map[d] = (map[d] || 0) + t.amount;
+        });
+        return Object.keys(map).sort().map(date => ({
+            name: new Date(date).getDate().toString(),
+            value: map[date]
+        })).slice(-14); // Last 14 active days
+    }, [state]);
 
-    const barData = useMemo(() => {
-        return state.budgets
-            .filter(b => !b.isArchived)
-            .map(b => ({
-                name: b.name,
-                terpakai: b.history.reduce((sum, h) => sum + h.amount, 0),
-                budget: b.totalBudget
-            }))
-            .filter(b => b.budget > 0);
-    }, [state.budgets]);
-
-    const areaData = useMemo(() => {
-        const dataMap: {[key: string]: {date: Date, amount: number}} = {};
-
-        const processTransaction = (t: {timestamp: number, amount: number}) => {
-            const dateObj = new Date(t.timestamp);
-            // Use local date string YYYY-MM-DD for correct day grouping
-            const dateKey = dateObj.toLocaleDateString('fr-CA'); 
-            
-            if (!dataMap[dateKey]) {
-                dataMap[dateKey] = { date: dateObj, amount: 0 };
-            }
-            dataMap[dateKey].amount += t.amount;
-        };
-
-        state.dailyExpenses.forEach(processTransaction);
-        state.budgets.forEach(b => b.history.forEach(processTransaction));
-        state.fundHistory.filter(t => t.type === 'remove').forEach(processTransaction);
-        
-        return Object.values(dataMap)
-            .sort((a, b) => a.date.getTime() - b.date.getTime())
-            .map(item => ({ 
-                name: item.date.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' }), 
-                value: item.amount,
-                fullDate: item.date
-            }));
-    }, [state.dailyExpenses, state.budgets, state.fundHistory]);
+    // Prepare Data: Income vs Expense (Bar)
+    const comparisonData = useMemo(() => {
+        const income = state.fundHistory.filter(t => t.type === 'add').reduce((sum, t) => sum + t.amount, 0);
+        const expense = allocationData.reduce((sum, d) => sum + d.size, 0);
+        return [
+            { name: 'Pemasukan', value: income, fill: '#1ABC9C' },
+            { name: 'Pengeluaran', value: expense, fill: '#E74C3C' }
+        ];
+    }, [state, allocationData]);
 
     const handleAIAnalysis = async () => {
+        if (!hasApiKey) return;
         setIsAnalyzing(true);
-        setAnalysis('');
+        setAiAnalysis('');
         
-        let dataContext = '';
-        let prompt = '';
-
-        if (chartType === 'treemap') {
-            dataContext = JSON.stringify(treemapData);
-            prompt = `Analisis distribusi pengeluaran ini (Treemap Data): ${dataContext}. Apa kategori yang paling membebani?`;
-        } else if (chartType === 'bar') {
-            dataContext = JSON.stringify(barData);
-            prompt = `Analisis perbandingan anggaran vs realisasi ini (Bar Chart Data): ${dataContext}. Mana yang overbudget atau efisien?`;
+        let promptData = "";
+        if (chartType === 'allocation') {
+            promptData = `Data Alokasi Pengeluaran: ${JSON.stringify(allocationData.map(d => `${d.name}: ${formatCurrency(d.size)}`))}`;
+        } else if (chartType === 'spending_trend') {
+            promptData = `Tren Pengeluaran Harian (14 hari terakhir): ${JSON.stringify(trendData)}`;
         } else {
-            dataContext = JSON.stringify(areaData);
-            prompt = `Analisis tren pengeluaran harian ini (Area Chart Data): ${dataContext}. Apakah ada pola lonjakan?`;
+            promptData = `Perbandingan Pemasukan vs Pengeluaran: ${JSON.stringify(comparisonData.map(d => `${d.name}: ${formatCurrency(d.value)}`))}`;
         }
 
-        const result = await onAnalyzeChart(prompt);
-        setAnalysis(result);
+        const result = await onAnalyzeChart(`Analisis grafik ini (${chartType}). ${promptData}. Berikan insight singkat dan tajam.`);
+        setAiAnalysis(result);
         setIsAnalyzing(false);
     };
 
-    return (
-        <div className="min-h-screen bg-gray-50 flex flex-col p-4 pb-24">
-            <div className="flex items-center gap-4 mb-6">
-                <button onClick={onBack} className="p-2 bg-white rounded-full shadow-sm hover:bg-gray-100 transition-colors">
-                    <ArrowUturnLeftIcon className="w-5 h-5 text-primary-navy" />
-                </button>
-                <h1 className="text-2xl font-bold text-primary-navy">Visualisasi Data</h1>
-            </div>
+    // Trigger analysis when chart type changes if already analyzing or on demand
+    useEffect(() => {
+        setAiAnalysis('');
+        // Optional: Auto analyze on switch? No, save tokens. User clicks.
+    }, [chartType]);
 
-            <div className="mb-6">
+    return (
+        <div className="h-screen flex flex-col bg-gray-50 pb-20 overflow-hidden">
+            {/* Header */}
+            <header className="bg-white p-4 shadow-sm z-10 flex items-center justify-between">
+                <button onClick={onBack} className="p-2 rounded-full hover:bg-gray-100 text-secondary-gray">
+                    <ArrowUturnLeftIcon className="w-6 h-6" />
+                </button>
+                <h1 className="text-xl font-bold text-primary-navy">Visualisasi Data</h1>
+                <div className="w-10"></div>
+            </header>
+
+            <div className="flex-1 overflow-y-auto p-4 space-y-6">
+                {/* Chart Selector */}
                 <SegmentedControl 
                     options={[
-                        { label: 'Distribusi', value: 'treemap' },
-                        { label: 'Anggaran', value: 'bar' },
-                        { label: 'Tren', value: 'area' }
+                        { label: 'Alokasi', value: 'allocation' },
+                        { label: 'Tren', value: 'spending_trend' },
+                        { label: 'Arus Kas', value: 'income_vs_expense' }
                     ]}
                     value={chartType}
-                    onChange={setChartType}
+                    onChange={(val) => setChartType(val)}
                 />
-            </div>
 
-            {/* CHART CONTAINER - Fixed height to ensure rendering */}
-            <div className="w-full h-[500px] bg-white rounded-2xl shadow-md p-4 border border-gray-100 relative overflow-hidden">
-                {chartType === 'treemap' && (
-                    treemapData.length > 0 ? (
-                        <ResponsiveContainer width="100%" height="100%">
-                            <Treemap
-                                data={treemapData}
-                                dataKey="size"
-                                aspectRatio={4 / 3}
-                                stroke="#fff"
-                                fill="#8884d8"
-                                content={<CustomizedTreemapContent />}
-                            >
-                                <Tooltip content={<CustomTooltip />} />
-                            </Treemap>
-                        </ResponsiveContainer>
-                    ) : (
-                        <div className="flex flex-col items-center justify-center h-full text-gray-400">
-                            <BuildingLibraryIcon className="w-12 h-12 mb-2 opacity-20" />
-                            <p>Belum ada pengeluaran tercatat.</p>
-                        </div>
-                    )
-                )}
+                {/* Chart Container */}
+                <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 h-96 relative">
+                    {chartType === 'allocation' && (
+                        allocationData.length > 0 ? (
+                            <ResponsiveContainer width="100%" height="100%">
+                                <Treemap
+                                    data={allocationData}
+                                    dataKey="size"
+                                    aspectRatio={4 / 3}
+                                    stroke="#fff"
+                                    content={<CustomizedTreemapContent />}
+                                >
+                                    <Tooltip content={<CustomTooltip />} />
+                                </Treemap>
+                            </ResponsiveContainer>
+                        ) : <div className="h-full flex items-center justify-center text-gray-400">Belum ada data pengeluaran.</div>
+                    )}
 
-                {chartType === 'bar' && (
-                    barData.length > 0 ? (
+                    {chartType === 'spending_trend' && (
+                        trendData.length > 0 ? (
+                            <ResponsiveContainer width="100%" height="100%">
+                                <AreaChart data={trendData}>
+                                    <defs>
+                                        <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor="#3498DB" stopOpacity={0.8}/>
+                                            <stop offset="95%" stopColor="#3498DB" stopOpacity={0}/>
+                                        </linearGradient>
+                                    </defs>
+                                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                                    <XAxis dataKey="name" tick={{fontSize: 10}} />
+                                    <YAxis tick={{fontSize: 10}} width={40} tickFormatter={(val) => val >= 1000 ? `${val/1000}k` : val} />
+                                    <Tooltip content={<CustomTooltip />} />
+                                    <Area type="monotone" dataKey="value" stroke="#3498DB" fillOpacity={1} fill="url(#colorValue)" />
+                                </AreaChart>
+                            </ResponsiveContainer>
+                        ) : <div className="h-full flex items-center justify-center text-gray-400">Belum ada tren data.</div>
+                    )}
+
+                    {chartType === 'income_vs_expense' && (
                         <ResponsiveContainer width="100%" height="100%">
-                            <BarChart data={barData} margin={{ top: 20, right: 30, left: 0, bottom: 5 }}>
+                            <BarChart data={comparisonData} barSize={60}>
                                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                                <XAxis dataKey="name" fontSize={10} />
-                                <YAxis fontSize={10} tickFormatter={(val) => val >= 1000 ? `${val/1000}k` : val} />
-                                <Tooltip cursor={{fill: 'transparent'}} content={<CustomTooltip />} />
-                                <Legend />
-                                <Bar dataKey="budget" name="Anggaran" fill="#E0E0E0" radius={[4, 4, 0, 0]} />
-                                <Bar dataKey="terpakai" name="Terpakai" fill="#1ABC9C" radius={[4, 4, 0, 0]} />
+                                <XAxis dataKey="name" tick={{fontSize: 12}} />
+                                <YAxis tick={{fontSize: 10}} width={40} tickFormatter={(val) => val >= 1000 ? `${val/1000}k` : val} />
+                                <Tooltip content={<CustomTooltip />} />
+                                <Bar dataKey="value" radius={[10, 10, 0, 0]}>
+                                    {comparisonData.map((entry, index) => (
+                                        <Cell key={`cell-${index}`} fill={entry.fill} />
+                                    ))}
+                                </Bar>
                             </BarChart>
                         </ResponsiveContainer>
-                    ) : (
-                        <div className="flex flex-col items-center justify-center h-full text-gray-400">
-                            <Squares2x2Icon className="w-12 h-12 mb-2 opacity-20" />
-                            <p>Belum ada Pos Anggaran aktif.</p>
-                        </div>
-                    )
-                )}
-
-                {chartType === 'area' && (
-                    areaData.length > 0 ? (
-                        <ResponsiveContainer width="100%" height="100%">
-                            <AreaChart data={areaData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
-                                <defs>
-                                    <linearGradient id="colorVal" x1="0" y1="0" x2="0" y2="1">
-                                        <stop offset="5%" stopColor="#3498DB" stopOpacity={0.8}/>
-                                        <stop offset="95%" stopColor="#3498DB" stopOpacity={0}/>
-                                    </linearGradient>
-                                </defs>
-                                <XAxis dataKey="name" fontSize={10} />
-                                <YAxis fontSize={10} tickFormatter={(val) => val >= 1000 ? `${val/1000}k` : val} />
-                                <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                                <Tooltip content={<CustomTooltip />} />
-                                <Area type="monotone" dataKey="value" stroke="#3498DB" fillOpacity={1} fill="url(#colorVal)" />
-                            </AreaChart>
-                        </ResponsiveContainer>
-                    ) : (
-                        <div className="flex flex-col items-center justify-center h-full text-gray-400">
-                            <ArrowTrendingUpIcon className="w-12 h-12 mb-2 opacity-20" />
-                            <p>Belum ada data tren harian.</p>
-                        </div>
-                    )
-                )}
-            </div>
-
-            {/* AI Analysis Section */}
-            <div className="mt-6 bg-white rounded-xl shadow-sm border border-indigo-100 p-4">
-                <div className="flex justify-between items-center mb-3">
-                    <div className="flex items-center gap-2">
-                        <SparklesIcon className="w-5 h-5 text-indigo-500" />
-                        <h3 className="font-bold text-indigo-900">Analisis AI</h3>
-                    </div>
-                    <button 
-                        onClick={handleAIAnalysis}
-                        disabled={isAnalyzing || !hasApiKey}
-                        className={`text-xs px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 transition-colors ${!hasApiKey ? 'bg-gray-200 text-gray-500 cursor-not-allowed' : 'bg-indigo-600 text-white hover:bg-indigo-700'}`}
-                    >
-                        {isAnalyzing ? 'Menganalisis...' : 'Analisis Grafik'}
-                        {!hasApiKey && <LockClosedIcon className="w-3 h-3" />}
-                    </button>
+                    )}
                 </div>
-                
-                {isAnalyzing ? (
-                    <AISkeleton />
-                ) : (
-                    <div className="text-sm text-secondary-gray leading-relaxed">
-                        {analysis ? (
-                            analysis
+
+                {/* AI Analysis Section */}
+                <div className="bg-gradient-to-br from-indigo-50 to-purple-50 p-5 rounded-2xl border border-indigo-100 shadow-sm">
+                    <div className="flex justify-between items-start mb-3">
+                        <div className="flex items-center gap-2">
+                            <div className="bg-white p-1.5 rounded-lg shadow-sm">
+                                <SparklesIcon className="w-5 h-5 text-purple-600" />
+                            </div>
+                            <h3 className="font-bold text-primary-navy">Analisis Grafik AI</h3>
+                        </div>
+                        {hasApiKey ? (
+                            <button 
+                                onClick={handleAIAnalysis}
+                                disabled={isAnalyzing}
+                                className="text-xs font-bold bg-white text-indigo-600 px-3 py-1.5 rounded-full shadow-sm hover:bg-indigo-50 transition-colors flex items-center gap-1 disabled:opacity-50"
+                            >
+                                {isAnalyzing ? <ArrowPathIcon className="w-3 h-3 animate-spin" /> : <LightbulbIcon className="w-3 h-3" />}
+                                {isAnalyzing ? 'Menganalisa...' : 'Analisis'}
+                            </button>
                         ) : (
-                            hasApiKey ? "Klik tombol untuk meminta AI membaca grafik ini dan memberikan wawasan." : "Fitur ini memerlukan API Key."
+                            <div className="text-xs font-bold bg-gray-200 text-gray-500 px-3 py-1.5 rounded-full flex items-center gap-1">
+                                <LockClosedIcon className="w-3 h-3" /> Terkunci
+                            </div>
                         )}
                     </div>
-                )}
+                    
+                    {isAnalyzing ? (
+                        <AISkeleton />
+                    ) : aiAnalysis ? (
+                        <div className="text-sm text-secondary-gray leading-relaxed animate-fade-in">
+                            {aiAnalysis}
+                        </div>
+                    ) : (
+                        <p className="text-xs text-gray-400 italic">
+                            Klik tombol analisis untuk mendapatkan wawasan mendalam tentang grafik di atas.
+                        </p>
+                    )}
+                </div>
             </div>
         </div>
     );

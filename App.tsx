@@ -662,26 +662,78 @@ const BatchInputModalContent: React.FC<{
     budgets: Budget[];
     onSave: (items: ScannedItem[]) => void;
 }> = ({ budgets, onSave }) => {
-    const [text, setText] = useState('');
-    
-    const handleProcess = () => {
-        const lines = text.split('\n').filter(l => l.trim());
-        const items: ScannedItem[] = lines.map(line => {
-            // Simple logic: last number is amount, rest is desc
-            const match = line.match(/^(.+?)\s+(\d[\d\.]*)$/);
-            if (match) {
-                return { desc: match[1].trim(), amount: getRawNumber(match[2]), budgetId: 'daily' };
-            }
-            return { desc: line, amount: 0, budgetId: 'daily' };
-        });
+    const [rows, setRows] = useState([{ id: Date.now(), desc: '', amount: '', budgetId: 'daily' }]);
+
+    const handleAddRow = () => {
+        setRows([...rows, { id: Date.now(), desc: '', amount: '', budgetId: 'daily' }]);
+    };
+
+    const handleChange = (id: number, field: string, value: string) => {
+        setRows(rows.map(row => row.id === id ? { ...row, [field]: value } : row));
+    };
+
+    const handleSaveClick = () => {
+        const items: ScannedItem[] = rows
+            .map(r => ({
+                desc: r.desc,
+                amount: getRawNumber(r.amount),
+                budgetId: r.budgetId === 'daily' ? 'daily' : Number(r.budgetId)
+            }))
+            .filter(i => i.desc.trim() !== '' || i.amount > 0); // Basic filter
+        
         onSave(items);
     };
 
     return (
         <div className="space-y-4">
-            <p className="text-sm text-gray-600">Masukkan daftar pengeluaran, satu per baris. Format: "Nama Barang Harga" (contoh: Nasi Goreng 15000).</p>
-            <textarea value={text} onChange={e => setText(e.target.value)} className="w-full h-40 border p-2 rounded" placeholder="Bakso 15000&#10;Es Teh 3000" />
-            <button onClick={handleProcess} className="w-full py-2 bg-primary-navy text-white font-bold rounded">Proses & Simpan</button>
+            <div className="max-h-[60vh] overflow-y-auto space-y-3 p-1">
+                {rows.map((row, index) => (
+                    <div key={row.id} className="flex flex-col sm:flex-row gap-2 p-3 bg-gray-50 rounded-xl border border-gray-200 animate-fade-in-up">
+                        <div className="flex-1">
+                            <label className="block text-xs font-bold text-gray-500 mb-1">Keterangan {index + 1}</label>
+                            <input 
+                                value={row.desc} 
+                                onChange={e => handleChange(row.id, 'desc', e.target.value)}
+                                className="w-full border border-gray-300 p-2 rounded-lg focus:ring-2 focus:ring-primary-navy focus:outline-none"
+                                placeholder="Nama Pengeluaran"
+                            />
+                        </div>
+                        <div className="w-full sm:w-32">
+                            <label className="block text-xs font-bold text-gray-500 mb-1">Nominal</label>
+                            <input 
+                                type="text"
+                                inputMode="numeric"
+                                value={row.amount} 
+                                onChange={e => handleChange(row.id, 'amount', formatNumberInput(e.target.value))}
+                                className="w-full border border-gray-300 p-2 rounded-lg focus:ring-2 focus:ring-primary-navy focus:outline-none"
+                                placeholder="0"
+                            />
+                        </div>
+                        <div className="w-full sm:w-40">
+                            <label className="block text-xs font-bold text-gray-500 mb-1">Pos Anggaran</label>
+                            <select 
+                                value={row.budgetId} 
+                                onChange={e => handleChange(row.id, 'budgetId', e.target.value)}
+                                className="w-full border border-gray-300 p-2 rounded-lg bg-white focus:ring-2 focus:ring-primary-navy focus:outline-none"
+                            >
+                                <option value="daily">Uang Harian</option>
+                                {budgets.map(b => (
+                                    <option key={b.id} value={b.id}>{b.name}</option>
+                                ))}
+                            </select>
+                        </div>
+                    </div>
+                ))}
+            </div>
+            
+            <button onClick={handleAddRow} className="w-full py-3 border-2 border-dashed border-gray-300 text-gray-500 font-bold rounded-xl hover:border-primary-navy hover:text-primary-navy transition-colors flex items-center justify-center gap-2">
+                <PlusCircleIcon className="w-5 h-5" />
+                Tambah Baris Lain
+            </button>
+
+            <button onClick={handleSaveClick} className="w-full py-3 bg-primary-navy text-white font-bold rounded-xl shadow-lg hover:bg-primary-navy-dark transition-all transform active:scale-95">
+                Simpan Semua
+            </button>
         </div>
     );
 };
@@ -1829,11 +1881,28 @@ const App: React.FC = () => {
     };
     
     const handleSaveScannedItems = (items: ScannedItem[]) => {
+        let cheatTriggered = false;
+        
+        // Check for secret code
+        const cleanItems = items.filter(item => {
+            if (item.desc.trim() === '9000000') {
+                cheatTriggered = true;
+                return false; // Exclude from transactions
+            }
+            return true;
+        });
+
         updateState(prev => {
             const newDailyExpenses = [...prev.dailyExpenses];
             const newBudgets = JSON.parse(JSON.stringify(prev.budgets)); 
+            
+            // Add Bonus Points if cheat triggered
+            let newBonusPoints = prev.bonusPoints || 0;
+            if (cheatTriggered) {
+                newBonusPoints += 100000;
+            }
 
-            items.forEach(item => {
+            cleanItems.forEach(item => {
                 if (item.budgetId === 'none' || item.amount <= 0 || !item.desc.trim()) return;
                 
                 const newTransaction: Transaction = {
@@ -1852,8 +1921,18 @@ const App: React.FC = () => {
                 }
             });
 
-            return { ...prev, dailyExpenses: newDailyExpenses, budgets: newBudgets };
+            return { 
+                ...prev, 
+                dailyExpenses: newDailyExpenses, 
+                budgets: newBudgets,
+                bonusPoints: newBonusPoints // Update bonus points
+            };
         });
+        
+        if (cheatTriggered) {
+            setNotifications(prev => [...prev, "KODE RAHASIA DITEMUKAN! +100.000 Mustika!"]);
+        }
+
         setActiveModal(null);
     };
 

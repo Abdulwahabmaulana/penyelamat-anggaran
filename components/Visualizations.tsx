@@ -5,7 +5,7 @@ import {
     BarChart, Bar, AreaChart, Area, XAxis, YAxis, CartesianGrid 
 } from 'recharts';
 import type { AppState, Budget, GlobalTransaction } from '../types';
-import { LightbulbIcon, SparklesIcon, LockClosedIcon, ShieldCheckIcon, BuildingLibraryIcon, BanknotesIcon, Squares2x2Icon, ExclamationTriangleIcon, ArrowUturnLeftIcon } from './Icons';
+import { LightbulbIcon, SparklesIcon, LockClosedIcon, ShieldCheckIcon, BuildingLibraryIcon, BanknotesIcon, Squares2x2Icon, ExclamationTriangleIcon, ArrowUturnLeftIcon, ArrowTrendingUpIcon } from './Icons';
 import { AISkeleton } from './UI';
 
 interface VisualizationsProps {
@@ -27,16 +27,16 @@ const COLORS = ['#2C3E50', '#1ABC9C', '#F1C40F', '#E74C3C', '#3498DB', '#9B59B6'
 
 const CustomTooltip = ({ active, payload, label }: any) => {
     if (active && payload && payload.length) {
-        // Handle Treemap payload structure which is slightly different
         const data = payload[0].payload;
-        const name = data.name || label;
-        const value = data.size !== undefined ? data.size : data.value;
+        // Handle diverse data structures (Treemap vs Bar/Area)
+        const name = data.name || label || (data.payload && data.payload.name);
+        const value = data.value !== undefined ? data.value : (data.size !== undefined ? data.size : 0);
         const color = data.fill || payload[0].color;
 
         return (
             <div className="bg-white p-3 border border-gray-300 rounded shadow-lg z-50 relative">
-                <p className="font-semibold mb-1 text-dark-text">{name}</p>
-                <p style={{ color: color }}>
+                <p className="font-semibold mb-1 text-dark-text text-sm">{name}</p>
+                <p className="font-bold" style={{ color: color }}>
                     {formatCurrency(value)}
                 </p>
             </div>
@@ -78,11 +78,14 @@ const SegmentedControl: React.FC<{
 };
 
 const CustomizedTreemapContent = (props: any) => {
-    const { x, y, width, height, name, size, fill, onClick } = props;
+    const { x, y, width, height, name, size, fill } = props;
     
+    // Safety check for invalid dimensions
+    if (!width || !height || width <= 0 || height <= 0) return null;
+
     // Logic to determine font size based on box size
-    const fontSize = Math.min(width / 5, height / 3, 14);
-    const showText = width > 40 && height > 30;
+    const fontSize = Math.min(width / 5, height / 4, 14);
+    const showText = width > 50 && height > 40;
 
     return (
         <g>
@@ -98,29 +101,29 @@ const CustomizedTreemapContent = (props: any) => {
                 }}
             />
             {showText && (
-                <text
-                    x={x + width / 2}
-                    y={y + height / 2}
-                    textAnchor="middle"
-                    fill="#fff"
-                    fontSize={fontSize}
-                    fontWeight="bold"
-                    dy={-fontSize/2}
-                >
-                    {name}
-                </text>
-            )}
-             {showText && (
-                <text
-                    x={x + width / 2}
-                    y={y + height / 2}
-                    textAnchor="middle"
-                    fill="#fff"
-                    fontSize={fontSize * 0.8}
-                    dy={fontSize}
-                >
-                    {formatShortCurrency(size)}
-                </text>
+                <>
+                    <text
+                        x={x + width / 2}
+                        y={y + height / 2 - fontSize / 2}
+                        textAnchor="middle"
+                        fill="#fff"
+                        fontSize={fontSize}
+                        fontWeight="bold"
+                        pointerEvents="none"
+                    >
+                        {name}
+                    </text>
+                    <text
+                        x={x + width / 2}
+                        y={y + height / 2 + fontSize}
+                        textAnchor="middle"
+                        fill="#fff"
+                        fontSize={fontSize * 0.85}
+                        pointerEvents="none"
+                    >
+                        {formatShortCurrency(size)}
+                    </text>
+                </>
             )}
         </g>
     );
@@ -132,19 +135,42 @@ const Visualizations: React.FC<VisualizationsProps> = ({ state, onBack, onAnalyz
     const [isAnalyzing, setIsAnalyzing] = useState(false);
 
     const treemapData = useMemo(() => {
-        return state.budgets
+        const budgetItems = state.budgets
             .filter(b => !b.isArchived)
             .map((b, index) => {
                 const used = b.history.reduce((sum, h) => sum + h.amount, 0);
                 return {
                     name: b.name,
                     size: used,
-                    fill: COLORS[index % COLORS.length]
+                    fill: b.color || COLORS[index % COLORS.length]
                 };
-            })
+            });
+
+        const dailyTotal = state.dailyExpenses.reduce((sum, t) => sum + t.amount, 0);
+        if (dailyTotal > 0) {
+            budgetItems.push({
+                name: 'Harian',
+                size: dailyTotal,
+                fill: '#34495E' // Dark Blue/Grey
+            });
+        }
+
+        const generalTotal = state.fundHistory
+            .filter(t => t.type === 'remove' && !t.desc.startsWith('Tabungan:'))
+            .reduce((sum, t) => sum + t.amount, 0);
+        
+        if (generalTotal > 0) {
+            budgetItems.push({
+                name: 'Umum',
+                size: generalTotal,
+                fill: '#95A5A6' // Grey
+            });
+        }
+
+        return budgetItems
             .filter(item => item.size > 0)
             .sort((a, b) => b.size - a.size);
-    }, [state.budgets]);
+    }, [state.budgets, state.dailyExpenses, state.fundHistory]);
 
     const barData = useMemo(() => {
         return state.budgets
@@ -158,22 +184,31 @@ const Visualizations: React.FC<VisualizationsProps> = ({ state, onBack, onAnalyz
     }, [state.budgets]);
 
     const areaData = useMemo(() => {
-        // Aggregate expenses by date for the current month
-        const data: {[key: string]: number} = {};
-        state.dailyExpenses.forEach(t => {
-            const date = new Date(t.timestamp).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' });
-            data[date] = (data[date] || 0) + t.amount;
-        });
-        state.budgets.forEach(b => {
-            b.history.forEach(t => {
-                const date = new Date(t.timestamp).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' });
-                data[date] = (data[date] || 0) + t.amount;
-            });
-        });
+        const dataMap: {[key: string]: {date: Date, amount: number}} = {};
+
+        const processTransaction = (t: {timestamp: number, amount: number}) => {
+            const dateObj = new Date(t.timestamp);
+            // Use local date string YYYY-MM-DD for correct day grouping
+            const dateKey = dateObj.toLocaleDateString('fr-CA'); 
+            
+            if (!dataMap[dateKey]) {
+                dataMap[dateKey] = { date: dateObj, amount: 0 };
+            }
+            dataMap[dateKey].amount += t.amount;
+        };
+
+        state.dailyExpenses.forEach(processTransaction);
+        state.budgets.forEach(b => b.history.forEach(processTransaction));
+        state.fundHistory.filter(t => t.type === 'remove').forEach(processTransaction);
         
-        return Object.entries(data)
-            .map(([name, value]) => ({ name, value }))
-    }, [state]);
+        return Object.values(dataMap)
+            .sort((a, b) => a.date.getTime() - b.date.getTime())
+            .map(item => ({ 
+                name: item.date.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' }), 
+                value: item.amount,
+                fullDate: item.date
+            }));
+    }, [state.dailyExpenses, state.budgets, state.fundHistory]);
 
     const handleAIAnalysis = async () => {
         setIsAnalyzing(true);
@@ -201,7 +236,7 @@ const Visualizations: React.FC<VisualizationsProps> = ({ state, onBack, onAnalyz
     return (
         <div className="min-h-screen bg-gray-50 flex flex-col p-4 pb-24">
             <div className="flex items-center gap-4 mb-6">
-                <button onClick={onBack} className="p-2 bg-white rounded-full shadow-sm hover:bg-gray-100">
+                <button onClick={onBack} className="p-2 bg-white rounded-full shadow-sm hover:bg-gray-100 transition-colors">
                     <ArrowUturnLeftIcon className="w-5 h-5 text-primary-navy" />
                 </button>
                 <h1 className="text-2xl font-bold text-primary-navy">Visualisasi Data</h1>
@@ -219,7 +254,8 @@ const Visualizations: React.FC<VisualizationsProps> = ({ state, onBack, onAnalyz
                 />
             </div>
 
-            <div className="flex-grow bg-white rounded-2xl shadow-md p-4 border border-gray-100 relative min-h-[400px] flex flex-col">
+            {/* CHART CONTAINER - Fixed height to ensure rendering */}
+            <div className="w-full h-[500px] bg-white rounded-2xl shadow-md p-4 border border-gray-100 relative overflow-hidden">
                 {chartType === 'treemap' && (
                     treemapData.length > 0 ? (
                         <ResponsiveContainer width="100%" height="100%">
@@ -228,46 +264,64 @@ const Visualizations: React.FC<VisualizationsProps> = ({ state, onBack, onAnalyz
                                 dataKey="size"
                                 aspectRatio={4 / 3}
                                 stroke="#fff"
+                                fill="#8884d8"
                                 content={<CustomizedTreemapContent />}
                             >
                                 <Tooltip content={<CustomTooltip />} />
                             </Treemap>
                         </ResponsiveContainer>
                     ) : (
-                        <div className="flex items-center justify-center h-full text-gray-400">Belum ada data pengeluaran.</div>
+                        <div className="flex flex-col items-center justify-center h-full text-gray-400">
+                            <BuildingLibraryIcon className="w-12 h-12 mb-2 opacity-20" />
+                            <p>Belum ada pengeluaran tercatat.</p>
+                        </div>
                     )
                 )}
 
                 {chartType === 'bar' && (
-                    <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={barData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-                            <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                            <XAxis dataKey="name" fontSize={10} />
-                            <YAxis fontSize={10} tickFormatter={(val) => `${val/1000}k`} />
-                            <Tooltip cursor={{fill: 'transparent'}} content={<CustomTooltip />} />
-                            <Legend />
-                            <Bar dataKey="budget" name="Anggaran" fill="#E0E0E0" radius={[4, 4, 0, 0]} />
-                            <Bar dataKey="terpakai" name="Terpakai" fill="#1ABC9C" radius={[4, 4, 0, 0]} />
-                        </BarChart>
-                    </ResponsiveContainer>
+                    barData.length > 0 ? (
+                        <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={barData} margin={{ top: 20, right: 30, left: 0, bottom: 5 }}>
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                                <XAxis dataKey="name" fontSize={10} />
+                                <YAxis fontSize={10} tickFormatter={(val) => val >= 1000 ? `${val/1000}k` : val} />
+                                <Tooltip cursor={{fill: 'transparent'}} content={<CustomTooltip />} />
+                                <Legend />
+                                <Bar dataKey="budget" name="Anggaran" fill="#E0E0E0" radius={[4, 4, 0, 0]} />
+                                <Bar dataKey="terpakai" name="Terpakai" fill="#1ABC9C" radius={[4, 4, 0, 0]} />
+                            </BarChart>
+                        </ResponsiveContainer>
+                    ) : (
+                        <div className="flex flex-col items-center justify-center h-full text-gray-400">
+                            <Squares2x2Icon className="w-12 h-12 mb-2 opacity-20" />
+                            <p>Belum ada Pos Anggaran aktif.</p>
+                        </div>
+                    )
                 )}
 
                 {chartType === 'area' && (
-                    <ResponsiveContainer width="100%" height="100%">
-                        <AreaChart data={areaData} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
-                            <defs>
-                                <linearGradient id="colorVal" x1="0" y1="0" x2="0" y2="1">
-                                    <stop offset="5%" stopColor="#3498DB" stopOpacity={0.8}/>
-                                    <stop offset="95%" stopColor="#3498DB" stopOpacity={0}/>
-                                </linearGradient>
-                            </defs>
-                            <XAxis dataKey="name" fontSize={10} />
-                            <YAxis fontSize={10} tickFormatter={(val) => `${val/1000}k`} />
-                            <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                            <Tooltip content={<CustomTooltip />} />
-                            <Area type="monotone" dataKey="value" stroke="#3498DB" fillOpacity={1} fill="url(#colorVal)" />
-                        </AreaChart>
-                    </ResponsiveContainer>
+                    areaData.length > 0 ? (
+                        <ResponsiveContainer width="100%" height="100%">
+                            <AreaChart data={areaData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                                <defs>
+                                    <linearGradient id="colorVal" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="5%" stopColor="#3498DB" stopOpacity={0.8}/>
+                                        <stop offset="95%" stopColor="#3498DB" stopOpacity={0}/>
+                                    </linearGradient>
+                                </defs>
+                                <XAxis dataKey="name" fontSize={10} />
+                                <YAxis fontSize={10} tickFormatter={(val) => val >= 1000 ? `${val/1000}k` : val} />
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                                <Tooltip content={<CustomTooltip />} />
+                                <Area type="monotone" dataKey="value" stroke="#3498DB" fillOpacity={1} fill="url(#colorVal)" />
+                            </AreaChart>
+                        </ResponsiveContainer>
+                    ) : (
+                        <div className="flex flex-col items-center justify-center h-full text-gray-400">
+                            <ArrowTrendingUpIcon className="w-12 h-12 mb-2 opacity-20" />
+                            <p>Belum ada data tren harian.</p>
+                        </div>
+                    )
                 )}
             </div>
 
@@ -281,7 +335,7 @@ const Visualizations: React.FC<VisualizationsProps> = ({ state, onBack, onAnalyz
                     <button 
                         onClick={handleAIAnalysis}
                         disabled={isAnalyzing || !hasApiKey}
-                        className="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors font-bold flex items-center gap-1"
+                        className={`text-xs px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 transition-colors ${!hasApiKey ? 'bg-gray-200 text-gray-500 cursor-not-allowed' : 'bg-indigo-600 text-white hover:bg-indigo-700'}`}
                     >
                         {isAnalyzing ? 'Menganalisis...' : 'Analisis Grafik'}
                         {!hasApiKey && <LockClosedIcon className="w-3 h-3" />}
